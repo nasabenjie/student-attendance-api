@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import users_router
+from app.routers.attendance import router as attendance_router
 
 app = FastAPI(
     title="Student Attendance API",
@@ -19,6 +20,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(users_router)
+app.include_router(attendance_router)
 
 @app.get("/")
 def read_root():
@@ -36,7 +38,7 @@ def health_check():
 async def startup_event():
     try:
         from app.database import engine, Base
-        from app.models import User
+        from app.models import User, Attendance
         Base.metadata.create_all(bind=engine)
         print("✅ Database tables created successfully!")
     except Exception as e:
