@@ -163,4 +163,89 @@ def get_class_attendance_today(class_name: str, db: Session = Depends(get_db)):
             "full_name": user.full_name
         })
     
+@router.get("/stats/user/{user_id}")
+def get_user_attendance_stats(user_id: int, db: Session = Depends(get_db)):
+    """Get attendance statistics for a user"""
+    
+    # Verify user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Get all attendance records
+    all_records = db.query(Attendance).filter(Attendance.user_id == user_id).all()
+    
+    if not all_records:
+        return {
+            "user_id": user_id,
+            "username": user.username,
+            "total_records": 0,
+            "present": 0,
+            "absent": 0,
+            "late": 0,
+            "excused": 0,
+            "attendance_rate": 0
+        }
+    
+    # Count by status
+    present = len([r for r in all_records if r.status == AttendanceStatus.PRESENT])
+    absent = len([r for r in all_records if r.status == AttendanceStatus.ABSENT])
+    late = len([r for r in all_records if r.status == AttendanceStatus.LATE])
+    excused = len([r for r in all_records if r.status == AttendanceStatus.EXCUSED])
+    
+    total = len(all_records)
+    attendance_rate = round((present + late) / total * 100, 2) if total > 0 else 0
+    
+    return {
+        "user_id": user_id,
+        "username": user.username,
+        "full_name": user.full_name,
+        "total_records": total,
+        "present": present,
+        "absent": absent,
+        "late": late,
+        "excused": excused,
+        "attendance_rate": f"{attendance_rate}%"
+    }
+
+
+@router.get("/stats/class/{class_name}")
+def get_class_attendance_stats(class_name: str, db: Session = Depends(get_db)):
+    """Get attendance statistics for a class"""
+    
+    all_records = db.query(Attendance).filter(
+        Attendance.class_name == class_name
+    ).all()
+    
+    if not all_records:
+        return {
+            "class_name": class_name,
+            "total_records": 0,
+            "unique_students": 0,
+            "present": 0,
+            "absent": 0,
+            "late": 0,
+            "excused": 0
+        }
+    
+    present = len([r for r in all_records if r.status == AttendanceStatus.PRESENT])
+    absent = len([r for r in all_records if r.status == AttendanceStatus.ABSENT])
+    late = len([r for r in all_records if r.status == AttendanceStatus.LATE])
+    excused = len([r for r in all_records if r.status == AttendanceStatus.EXCUSED])
+    
+    unique_students = len(set([r.user_id for r in all_records]))
+    
+    return {
+        "class_name": class_name,
+        "total_records": len(all_records),
+        "unique_students": unique_students,
+        "present": present,
+        "absent": absent,
+        "late": late,
+        "excused": excused
+    }
+    
     return result
