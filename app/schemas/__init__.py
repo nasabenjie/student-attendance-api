@@ -5,3 +5,4 @@ from app.schemas.attendance import (
     AttendanceResponse,
     AttendanceWithUser
 )
+from app.schemas.auth import Token, LoginRequest, LoginResponse

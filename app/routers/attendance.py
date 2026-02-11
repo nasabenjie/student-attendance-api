@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import Optional
-from sqlalchemy import func
-from typing import List
+from typing import List, Optional
 from datetime import datetime, date
+from sqlalchemy import func
 
 from app.database import get_db
 from app.models.attendance import Attendance, AttendanceStatus
@@ -14,6 +13,7 @@ from app.schemas.attendance import (
     AttendanceResponse,
     AttendanceWithUser
 )
+from app.utils.jwt import get_current_active_user, require_teacher
 
 router = APIRouter(
     prefix="/attendance",
@@ -21,15 +21,18 @@ router = APIRouter(
 )
 
 @router.post("/check-in", response_model=AttendanceResponse, status_code=status.HTTP_201_CREATED)
-def check_in(attendance: AttendanceCheckIn, db: Session = Depends(get_db)):
-    """Student checks in for a class"""
+def check_in(
+    attendance: AttendanceCheckIn, 
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Student checks in for a class (requires authentication)"""
     
-    # Verify user exists
-    user = db.query(User).filter(User.id == attendance.user_id).first()
-    if not user:
+    # User can only check in for themselves
+    if attendance.user_id != current_user.id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only check in for yourself"
         )
     
     # Check if already checked in today for this class
@@ -62,19 +65,11 @@ def check_in(attendance: AttendanceCheckIn, db: Session = Depends(get_db)):
 
 @router.post("/mark", response_model=AttendanceResponse, status_code=status.HTTP_201_CREATED)
 def mark_attendance(
-    attendance: AttendanceMarkByTeacher, 
-    teacher_id: int = Query(..., description="ID of teacher marking attendance"),
+    attendance: AttendanceMarkByTeacher,
+    teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db)
 ):
-    """Teacher marks student attendance"""
-    
-    # Verify teacher exists and is a teacher
-    teacher = db.query(User).filter(User.id == teacher_id).first()
-    if not teacher or not teacher.is_teacher:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can mark attendance"
-        )
+    """Teacher marks student attendance (requires teacher authentication)"""
     
     # Verify student exists
     student = db.query(User).filter(User.id == attendance.user_id).first()
@@ -90,7 +85,7 @@ def mark_attendance(
         class_name=attendance.class_name,
         status=attendance.status,
         notes=attendance.notes,
-        marked_by=teacher_id
+        marked_by=teacher.id
     )
     
     db.add(db_attendance)
@@ -105,11 +100,16 @@ def get_all_attendance(
     limit: int = 100,
     class_name: Optional[str] = None,
     date_filter: Optional[date] = None,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Get all attendance records with optional filters"""
+    """Get all attendance records with optional filters (requires authentication)"""
     
     query = db.query(Attendance)
+    
+    # Students can only see their own attendance
+    if not current_user.is_teacher:
+        query = query.filter(Attendance.user_id == current_user.id)
     
     if class_name:
         query = query.filter(Attendance.class_name == class_name)
@@ -121,8 +121,19 @@ def get_all_attendance(
     return attendance
 
 @router.get("/user/{user_id}", response_model=List[AttendanceResponse])
-def get_user_attendance(user_id: int, db: Session = Depends(get_db)):
-    """Get attendance records for a specific user"""
+def get_user_attendance(
+    user_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get attendance records for a specific user (requires authentication)"""
+    
+    # Students can only view their own attendance
+    if not current_user.is_teacher and user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own attendance"
+        )
     
     # Verify user exists
     user = db.query(User).filter(User.id == user_id).first()
@@ -136,8 +147,12 @@ def get_user_attendance(user_id: int, db: Session = Depends(get_db)):
     return attendance
 
 @router.get("/class/{class_name}/today", response_model=List[AttendanceWithUser])
-def get_class_attendance_today(class_name: str, db: Session = Depends(get_db)):
-    """Get today's attendance for a specific class"""
+def get_class_attendance_today(
+    class_name: str,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    """Get today's attendance for a specific class (teachers only)"""
     
     today = datetime.now().date()
     
@@ -163,9 +178,22 @@ def get_class_attendance_today(class_name: str, db: Session = Depends(get_db)):
             "full_name": user.full_name
         })
     
+    return result
+
 @router.get("/stats/user/{user_id}")
-def get_user_attendance_stats(user_id: int, db: Session = Depends(get_db)):
-    """Get attendance statistics for a user"""
+def get_user_attendance_stats(
+    user_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get attendance statistics for a user (requires authentication)"""
+    
+    # Students can only view their own stats
+    if not current_user.is_teacher and user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own statistics"
+        )
     
     # Verify user exists
     user = db.query(User).filter(User.id == user_id).first()
@@ -211,10 +239,13 @@ def get_user_attendance_stats(user_id: int, db: Session = Depends(get_db)):
         "attendance_rate": f"{attendance_rate}%"
     }
 
-
 @router.get("/stats/class/{class_name}")
-def get_class_attendance_stats(class_name: str, db: Session = Depends(get_db)):
-    """Get attendance statistics for a class"""
+def get_class_attendance_stats(
+    class_name: str,
+    teacher: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    """Get attendance statistics for a class (teachers only)"""
     
     all_records = db.query(Attendance).filter(
         Attendance.class_name == class_name
@@ -247,5 +278,3 @@ def get_class_attendance_stats(class_name: str, db: Session = Depends(get_db)):
         "late": late,
         "excused": excused
     }
-    
-    return result
